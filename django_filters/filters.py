@@ -138,7 +138,7 @@ class Filter(object):
                                                help_text=help_text, **self.extra)
         return self._field
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         if isinstance(value, Lookup):
             lookup = six.text_type(value.lookup_type)
             value = value.value
@@ -216,7 +216,7 @@ class MultipleChoiceFilter(Filter):
 
         return False
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         value = value or ()  # Make sure we have an iterable
 
         if self.is_noop(qs, value):
@@ -283,7 +283,7 @@ class NumberFilter(Filter):
 class NumericRangeFilter(Filter):
     field_class = RangeField
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         if value:
             if value.start is not None and value.stop is not None:
                 lookup = '%s__%s' % (self.name, self.lookup_expr)
@@ -301,7 +301,7 @@ class NumericRangeFilter(Filter):
 class RangeFilter(Filter):
     field_class = RangeField
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         if value:
             if value.start is not None and value.stop is not None:
                 lookup = '%s__range' % self.name
@@ -351,7 +351,7 @@ class DateRangeFilter(ChoiceFilter):
             (key, value[0]) for key, value in six.iteritems(self.options)]
         super(DateRangeFilter, self).__init__(*args, **kwargs)
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         try:
             value = int(value)
         except (ValueError, TypeError):
@@ -475,7 +475,7 @@ class MethodFilter(Filter):
         # Call the parent
         super(MethodFilter, self).__init__(*args, **kwargs)
 
-    def filter(self, qs, value):
+    def filter(self, qs, value, *args, **kwargs):
         """
         This filter method will act as a proxy for the actual method we want to
         call.
