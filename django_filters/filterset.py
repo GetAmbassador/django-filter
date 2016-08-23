@@ -357,7 +357,7 @@ class BaseFilterSet(object):
                         # else STRICTNESS.IGNORE...  ignoring
 
                 if value is not None:  # valid & clean data
-                    qs = filter_.filter(qs, value, (filter.exclude or False))
+                    qs = filter_.filter(qs, value, (filter_.exclude or False))
 
             if self._meta.order_by:
                 order_field = self.form.fields[self.order_by_field]
