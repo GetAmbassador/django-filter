@@ -490,5 +490,5 @@ class MethodFilter(Filter):
             func_str = 'filter_{0}'.format(self.name)
             parent_filter_method = getattr(parent, func_str, None)
         if parent_filter_method is not None:
-            return parent_filter_method(qs, value)
+            return parent_filter_method(qs, value, self.exclude)
         return qs
