@@ -1,228 +1,152 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import copy
-import re
 from collections import OrderedDict
 
 from django import forms
-from django.forms.forms import NON_FIELD_ERRORS
-from django.core.validators import EMPTY_VALUES
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.fields.related import ForeignObjectRel
 from django.utils import six
-from django.utils.text import capfirst
-from django.utils.translation import ugettext as _
 
-from .compat import remote_field, remote_model, remote_queryset
-from .filters import (Filter, CharFilter, BooleanFilter, BaseInFilter, BaseRangeFilter,
-                      ChoiceFilter, DateFilter, DateTimeFilter, TimeFilter, ModelChoiceFilter,
-                      ModelMultipleChoiceFilter, NumberFilter, UUIDFilter,
-                      DurationFilter)
-from .utils import try_dbfield, get_all_model_fields, get_model_field, resolve_field, deprecate
-
-
-ORDER_BY_FIELD = 'o'
-
-
-class STRICTNESS(object):
-    """
-    Values of False & True chosen for backward compatability reasons.
-    Originally, these were the only options.
-    """
-    IGNORE = False
-    RETURN_NO_RESULTS = True
-    RAISE_VALIDATION_ERROR = "RAISE"
-
-
-def get_declared_filters(bases, attrs, with_base_filters=True):
-    filters = []
-    for filter_name, obj in list(attrs.items()):
-        if isinstance(obj, Filter):
-            obj = attrs.pop(filter_name)
-            if getattr(obj, 'name', None) is None:
-                obj.name = filter_name
-            filters.append((filter_name, obj))
-    filters.sort(key=lambda x: x[1].creation_counter)
-
-    if with_base_filters:
-        for base in bases[::-1]:
-            if hasattr(base, 'base_filters'):
-                filters = list(base.base_filters.items()) + filters
-    else:
-        for base in bases[::-1]:
-            if hasattr(base, 'declared_filters'):
-                filters = list(base.declared_filters.items()) + filters
-
-    return OrderedDict(filters)
+from .compat import remote_field, remote_queryset
+from .conf import settings
+from .constants import ALL_FIELDS, EMPTY_VALUES, STRICTNESS
+from .filters import (
+    BaseInFilter,
+    BaseRangeFilter,
+    BooleanFilter,
+    CharFilter,
+    ChoiceFilter,
+    DateFilter,
+    DateTimeFilter,
+    DurationFilter,
+    Filter,
+    ModelChoiceFilter,
+    ModelMultipleChoiceFilter,
+    NumberFilter,
+    TimeFilter,
+    UUIDFilter
+)
+from .utils import (
+    deprecate,
+    get_all_model_fields,
+    get_model_field,
+    resolve_field,
+    try_dbfield
+)
 
 
-def filters_for_model(model, fields=None, exclude=None, filter_for_field=None,
-                      filter_for_reverse_field=None):
-    field_dict = OrderedDict()
+def _together_valid(form, fieldset):
+    field_presence = [
+        form.cleaned_data.get(field) not in EMPTY_VALUES
+        for field in fieldset
+    ]
 
-    # Setting exclude with no fields implies all other fields.
-    if exclude is not None and fields is None:
-        fields = '__all__'
-
-    # All implies all db fields associated with a filter_class.
-    if fields == '__all__':
-        fields = get_all_model_fields(model)
-
-    # Loop through the list of fields.
-    for f in fields:
-        # Skip the field if excluded.
-        if exclude is not None and f in exclude:
-            continue
-        field = get_model_field(model, f)
-        # Do nothing if the field doesn't exist.
-        if field is None:
-            field_dict[f] = None
-            continue
-        if isinstance(field, ForeignObjectRel):
-            filter_ = filter_for_reverse_field(field, f)
-            if filter_:
-                field_dict[f] = filter_
-        # If fields is a dictionary, it must contain lists.
-        elif isinstance(fields, dict):
-            # Create a filter for each lookup type.
-            for lookup_expr in fields[f]:
-                filter_ = filter_for_field(field, f, lookup_expr)
-
-                if filter_:
-                    filter_name = LOOKUP_SEP.join([f, lookup_expr])
-
-                    # Don't add "exact" to filter names
-                    _exact = LOOKUP_SEP + 'exact'
-                    if filter_name.endswith(_exact):
-                        filter_name = filter_name[:-len(_exact)]
-
-                    field_dict[filter_name] = filter_
-        # If fields is a list, it contains strings.
-        else:
-            filter_ = filter_for_field(field, f)
-            if filter_:
-                field_dict[f] = filter_
-    return field_dict
+    if any(field_presence):
+        return all(field_presence)
+    return True
 
 
 def get_full_clean_override(together):
+    # coerce together to list of pairs
+    if isinstance(together[0], (six.string_types)):
+        together = [together]
+
     def full_clean(form):
-
-        def add_error(message):
-            try:
-                form.add_error(None, message)
-            except AttributeError:
-                form._errors[NON_FIELD_ERRORS] = message
-
-        def all_valid(fieldset):
-            cleaned_data = form.cleaned_data
-            count = len([i for i in fieldset if cleaned_data.get(i)])
-            return 0 < count < len(fieldset)
-
         super(form.__class__, form).full_clean()
         message = 'Following fields must be together: %s'
-        if isinstance(together[0], (list, tuple)):
-            for each in together:
-                if all_valid(each):
-                    return add_error(message % ','.join(each))
-        elif all_valid(together):
-            return add_error(message % ','.join(together))
+
+        for each in together:
+            if not _together_valid(form, each):
+                return form.add_error(None, message % ','.join(each))
+
     return full_clean
 
 
 class FilterSetOptions(object):
     def __init__(self, options=None):
-        if getattr(options, 'model', None) is not None:
-            if not hasattr(options, 'fields') and not hasattr(options, 'exclude'):
-                deprecate(
-                    "Not setting Meta.fields with Meta.model is undocumented behavior "
-                    "and may result in unintentionally exposing filter fields. This has "
-                    "been deprecated in favor of setting Meta.fields = '__all__' or by "
-                    "setting the Meta.exclude attribute.", 1)
-
-            elif getattr(options, 'fields', -1) is None:
-                deprecate(
-                    "Setting 'Meta.fields = None' is undocumented behavior and has been "
-                    "deprecated in favor of Meta.fields = '__all__'.", 1)
-
         self.model = getattr(options, 'model', None)
         self.fields = getattr(options, 'fields', None)
         self.exclude = getattr(options, 'exclude', None)
 
-        self.order_by = getattr(options, 'order_by', False)
+        self.filter_overrides = getattr(options, 'filter_overrides', {})
+
+        self.strict = getattr(options, 'strict', None)
 
         self.form = getattr(options, 'form', forms.Form)
 
+        if hasattr(options, 'together'):
+            deprecate('The `Meta.together` option has been deprecated in favor of overriding `Form.clean`.', 1)
         self.together = getattr(options, 'together', None)
 
 
 class FilterSetMetaclass(type):
     def __new__(cls, name, bases, attrs):
-        try:
-            parents = [b for b in bases if issubclass(b, FilterSet)]
-        except NameError:
-            # We are defining FilterSet itself here
-            parents = None
-        declared_filters = get_declared_filters(bases, attrs, False)
-        new_class = super(
-            FilterSetMetaclass, cls).__new__(cls, name, bases, attrs)
+        attrs['declared_filters'] = cls.get_declared_filters(bases, attrs)
 
-        if not parents:
-            return new_class
+        new_class = super(FilterSetMetaclass, cls).__new__(cls, name, bases, attrs)
+        new_class._meta = FilterSetOptions(getattr(new_class, 'Meta', None))
+        new_class.base_filters = new_class.get_filters()
 
-        opts = new_class._meta = FilterSetOptions(
-            getattr(new_class, 'Meta', None))
-
-        # TODO: replace with deprecations
-        # if opts.model and opts.fields:
-        if opts.model:
-            filters = new_class.filters_for_model(opts.model, opts)
-            filters.update(declared_filters)
-        else:
-            filters = declared_filters
-
-        not_defined = next((k for k, v in filters.items() if v is None), False)
-        if not_defined:
-            raise TypeError("Meta.fields contains a field that isn't defined "
-                            "on this FilterSet: {}".format(not_defined))
-
-        new_class.declared_filters = declared_filters
-        new_class.base_filters = filters
         return new_class
+
+    @classmethod
+    def get_declared_filters(cls, bases, attrs):
+        filters = [
+            (filter_name, attrs.pop(filter_name))
+            for filter_name, obj in list(attrs.items())
+            if isinstance(obj, Filter)
+        ]
+
+        # Default the `filter.field_name` to the attribute name on the filterset
+        for filter_name, f in filters:
+            if getattr(f, 'field_name', None) is None:
+                f.field_name = filter_name
+
+        filters.sort(key=lambda x: x[1].creation_counter)
+
+        # merge declared filters from base classes
+        for base in reversed(bases):
+            if hasattr(base, 'declared_filters'):
+                filters = [
+                    (name, f) for name, f
+                    in base.declared_filters.items()
+                    if name not in attrs
+                ] + filters
+
+        return OrderedDict(filters)
 
 
 FILTER_FOR_DBFIELD_DEFAULTS = {
-    models.AutoField: {
-        'filter_class': NumberFilter
-    },
-    models.CharField: {
-        'filter_class': CharFilter
-    },
-    models.TextField: {
-        'filter_class': CharFilter
-    },
-    models.BooleanField: {
-        'filter_class': BooleanFilter
-    },
-    models.DateField: {
-        'filter_class': DateFilter
-    },
-    models.DateTimeField: {
-        'filter_class': DateTimeFilter
-    },
-    models.TimeField: {
-        'filter_class': TimeFilter
-    },
-    models.DurationField: {
-        'filter_class': DurationFilter
-    },
+    models.AutoField:                   {'filter_class': NumberFilter},
+    models.CharField:                   {'filter_class': CharFilter},
+    models.TextField:                   {'filter_class': CharFilter},
+    models.BooleanField:                {'filter_class': BooleanFilter},
+    models.DateField:                   {'filter_class': DateFilter},
+    models.DateTimeField:               {'filter_class': DateTimeFilter},
+    models.TimeField:                   {'filter_class': TimeFilter},
+    models.DurationField:               {'filter_class': DurationFilter},
+    models.DecimalField:                {'filter_class': NumberFilter},
+    models.SmallIntegerField:           {'filter_class': NumberFilter},
+    models.IntegerField:                {'filter_class': NumberFilter},
+    models.PositiveIntegerField:        {'filter_class': NumberFilter},
+    models.PositiveSmallIntegerField:   {'filter_class': NumberFilter},
+    models.FloatField:                  {'filter_class': NumberFilter},
+    models.NullBooleanField:            {'filter_class': BooleanFilter},
+    models.SlugField:                   {'filter_class': CharFilter},
+    models.EmailField:                  {'filter_class': CharFilter},
+    models.FilePathField:               {'filter_class': CharFilter},
+    models.URLField:                    {'filter_class': CharFilter},
+    models.GenericIPAddressField:       {'filter_class': CharFilter},
+    models.CommaSeparatedIntegerField:  {'filter_class': CharFilter},
+    models.UUIDField:                   {'filter_class': UUIDFilter},
     models.OneToOneField: {
         'filter_class': ModelChoiceFilter,
         'extra': lambda f: {
             'queryset': remote_queryset(f),
             'to_field_name': remote_field(f).field_name,
+            'null_label': settings.NULL_CHOICE_LABEL if f.null else None,
         }
     },
     models.ForeignKey: {
@@ -230,6 +154,7 @@ FILTER_FOR_DBFIELD_DEFAULTS = {
         'extra': lambda f: {
             'queryset': remote_queryset(f),
             'to_field_name': remote_field(f).field_name,
+            'null_label': settings.NULL_CHOICE_LABEL if f.null else None,
         }
     },
     models.ManyToManyField: {
@@ -238,102 +163,50 @@ FILTER_FOR_DBFIELD_DEFAULTS = {
             'queryset': remote_queryset(f),
         }
     },
-    models.DecimalField: {
-        'filter_class': NumberFilter,
-    },
-    models.SmallIntegerField: {
-        'filter_class': NumberFilter,
-    },
-    models.IntegerField: {
-        'filter_class': NumberFilter,
-    },
-    models.PositiveIntegerField: {
-        'filter_class': NumberFilter,
-    },
-    models.PositiveSmallIntegerField: {
-        'filter_class': NumberFilter,
-    },
-    models.FloatField: {
-        'filter_class': NumberFilter,
-    },
-    models.NullBooleanField: {
-        'filter_class': BooleanFilter,
-    },
-    models.SlugField: {
-        'filter_class': CharFilter,
-    },
-    models.EmailField: {
-        'filter_class': CharFilter,
-    },
-    models.FilePathField: {
-        'filter_class': CharFilter,
-    },
-    models.URLField: {
-        'filter_class': CharFilter,
-    },
-    models.GenericIPAddressField: {
-        'filter_class': CharFilter,
-    },
-    models.CommaSeparatedIntegerField: {
-        'filter_class': CharFilter,
-    },
-    models.UUIDField: {
-        'filter_class': UUIDFilter,
-    },
 }
 
 
 class BaseFilterSet(object):
-    filter_overrides = {}
-    order_by_field = ORDER_BY_FIELD
-    # What to do on on validation errors
-    strict = STRICTNESS.RETURN_NO_RESULTS
+    FILTER_DEFAULTS = FILTER_FOR_DBFIELD_DEFAULTS
 
-    def __init__(self, data=None, queryset=None, prefix=None, strict=None):
+    def __init__(self, data=None, queryset=None, prefix=None, strict=None, request=None):
         self.is_bound = data is not None
         self.data = data or {}
         if queryset is None:
             queryset = self._meta.model._default_manager.all()
         self.queryset = queryset
         self.form_prefix = prefix
-        if strict is not None:
-            self.strict = strict
+
+        # What to do on on validation errors
+        # Fallback to meta, then settings strictness
+        if strict is None:
+            strict = self._meta.strict
+        if strict is None:
+            strict = settings.STRICTNESS
+
+        # transform legacy values
+        self.strict = STRICTNESS._LEGACY.get(strict, strict)
+
+        self.request = request
 
         self.filters = copy.deepcopy(self.base_filters)
-        # propagate the model being used through the filters
+
         for filter_ in self.filters.values():
+            # propagate the model and filterset to the filters
             filter_.model = self._meta.model
-
-        # Apply the parent to the filters, this will allow the filters to access the filterset
-        for filter_key, filter_ in six.iteritems(self.filters):
             filter_.parent = self
-
-    def __iter__(self):
-        deprecate('QuerySet methods are no longer proxied.')
-        for obj in self.qs:
-            yield obj
-
-    def __len__(self):
-        deprecate('QuerySet methods are no longer proxied.')
-        return self.qs.count()
-
-    def __getitem__(self, key):
-        deprecate('QuerySet methods are no longer proxied.')
-        return self.qs[key]
-
-    def count(self):
-        deprecate('QuerySet methods are no longer proxied.')
-        return self.qs.count()
 
     @property
     def qs(self):
         if not hasattr(self, '_qs'):
-            valid = self.is_bound and self.form.is_valid()
+            if not self.is_bound:
+                self._qs = self.queryset.all()
+                return self._qs
 
-            if self.is_bound and not valid:
+            if not self.form.is_valid():
                 if self.strict == STRICTNESS.RAISE_VALIDATION_ERROR:
                     raise forms.ValidationError(self.form.errors)
-                elif bool(self.strict) == STRICTNESS.RETURN_NO_RESULTS:
+                elif self.strict == STRICTNESS.RETURN_NO_RESULTS:
                     self._qs = self.queryset.none()
                     return self._qs
                 # else STRICTNESS.IGNORE...  ignoring
@@ -341,40 +214,10 @@ class BaseFilterSet(object):
             # start with all the results and filter from there
             qs = self.queryset.all()
             for name, filter_ in six.iteritems(self.filters):
-                value = None
-                if valid:
-                    value = self.form.cleaned_data[name]
-                else:
-                    raw_value = self.form[name].value()
-                    try:
-                        value = self.form.fields[name].clean(raw_value)
-                    except forms.ValidationError:
-                        if self.strict == STRICTNESS.RAISE_VALIDATION_ERROR:
-                            raise
-                        elif bool(self.strict) == STRICTNESS.RETURN_NO_RESULTS:
-                            self._qs = self.queryset.none()
-                            return self._qs
-                        # else STRICTNESS.IGNORE...  ignoring
+                value = self.form.cleaned_data.get(name)
 
                 if value is not None:  # valid & clean data
                     qs = filter_.filter(qs, value, filter_.exclude)
-
-            if self._meta.order_by:
-                order_field = self.form.fields[self.order_by_field]
-                data = self.form[self.order_by_field].data
-                ordered_value = None
-                try:
-                    ordered_value = order_field.clean(data)
-                except forms.ValidationError:
-                    pass
-
-                # With a None-queryset, ordering must be enforced (#84).
-                if (ordered_value in EMPTY_VALUES and
-                        self.strict == STRICTNESS.RETURN_NO_RESULTS):
-                    ordered_value = self.form.fields[self.order_by_field].choices[0][0]
-
-                if ordered_value:
-                    qs = qs.order_by(*self.get_order_by(ordered_value))
 
             self._qs = qs
 
@@ -386,7 +229,7 @@ class BaseFilterSet(object):
             fields = OrderedDict([
                 (name, filter_.field)
                 for name, filter_ in six.iteritems(self.filters)])
-            fields[self.order_by_field] = self.ordering_field
+
             Form = type(str('%sForm' % self.__class__.__name__),
                         (self._meta.form,), fields)
             if self._meta.together:
@@ -397,73 +240,113 @@ class BaseFilterSet(object):
                 self._form = Form(prefix=self.form_prefix)
         return self._form
 
-    def get_ordering_field(self):
-        if self._meta.order_by:
-            if isinstance(self._meta.order_by, (list, tuple)):
-                if isinstance(self._meta.order_by[0], (list, tuple)):
-                    # e.g. (('field', 'Display name'), ...)
-                    choices = [(f[0], f[1]) for f in self._meta.order_by]
-                else:
-                    choices = []
-                    for f in self._meta.order_by:
-                        if f[0] == '-':
-                            label = _('%s (descending)' % capfirst(f[1:]))
-                        else:
-                            label = capfirst(f)
-                        choices.append((f, label))
-            else:
-                # add asc and desc field names
-                # use the filter's label if provided
-                choices = []
-                for f, fltr in self.filters.items():
-                    choices.extend([
-                        (f, fltr.label or capfirst(f)),
-                        ("-%s" % (f), _('%s (descending)' % (fltr.label or capfirst(f))))
-                    ])
-            return forms.ChoiceField(label=_("Ordering"), required=False,
-                                     choices=choices)
+    @classmethod
+    def get_fields(cls):
+        """
+        Resolve the 'fields' argument that should be used for generating filters on the
+        filterset. This is 'Meta.fields' sans the fields in 'Meta.exclude'.
+        """
+        model = cls._meta.model
+        fields = cls._meta.fields
+        exclude = cls._meta.exclude
 
-    @property
-    def ordering_field(self):
-        if not hasattr(self, '_ordering_field'):
-            self._ordering_field = self.get_ordering_field()
-        return self._ordering_field
+        assert not (fields is None and exclude is None), \
+            "Setting 'Meta.model' without either 'Meta.fields' or 'Meta.exclude' " \
+            "has been deprecated since 0.15.0 and is now disallowed. Add an explicit " \
+            "'Meta.fields' or 'Meta.exclude' to the %s class." % cls.__name__
 
-    def get_order_by(self, order_choice):
-        re_ordering_field = re.compile(r'(?P<inverse>\-?)(?P<field>.*)')
-        m = re.match(re_ordering_field, order_choice)
-        inverted = m.group('inverse')
-        filter_api_name = m.group('field')
+        # Setting exclude with no fields implies all other fields.
+        if exclude is not None and fields is None:
+            fields = ALL_FIELDS
 
-        _filter = self.filters.get(filter_api_name, None)
+        # Resolve ALL_FIELDS into all fields for the filterset's model.
+        if fields == ALL_FIELDS:
+            fields = get_all_model_fields(model)
 
-        if _filter and filter_api_name != _filter.name:
-            return [inverted + _filter.name]
-        return [order_choice]
+        # Remove excluded fields
+        exclude = exclude or []
+        if not isinstance(fields, dict):
+            fields = [(f, ['exact']) for f in fields if f not in exclude]
+        else:
+            fields = [(f, lookups) for f, lookups in fields.items() if f not in exclude]
+
+        return OrderedDict(fields)
 
     @classmethod
-    def filters_for_model(cls, model, opts):
-        # TODO: remove with deprecations - this emulates the old behavior
-        fields = opts.fields
-        if fields is None:
-            DEFAULTS = dict(FILTER_FOR_DBFIELD_DEFAULTS)
-            DEFAULTS.update(cls.filter_overrides)
-            fields = get_all_model_fields(model, field_types=DEFAULTS.keys())
+    def get_filter_name(cls, field_name, lookup_expr):
+        """
+        Combine a field name and lookup expression into a usable filter name.
+        Exact lookups are the implicit default, so "exact" is stripped from the
+        end of the filter name.
+        """
+        filter_name = LOOKUP_SEP.join([field_name, lookup_expr])
 
-        return filters_for_model(
-            model, fields, opts.exclude,
-            cls.filter_for_field,
-            cls.filter_for_reverse_field
-        )
+        # This also works with transformed exact lookups, such as 'date__exact'
+        _exact = LOOKUP_SEP + 'exact'
+        if filter_name.endswith(_exact):
+            filter_name = filter_name[:-len(_exact)]
+
+        return filter_name
 
     @classmethod
-    def filter_for_field(cls, f, name, lookup_expr='exact'):
+    def get_filters(cls):
+        """
+        Get all filters for the filterset. This is the combination of declared and
+        generated filters.
+        """
+
+        # No model specified - skip filter generation
+        if not cls._meta.model:
+            return cls.declared_filters.copy()
+
+        # Determine the filters that should be included on the filterset.
+        filters = OrderedDict()
+        fields = cls.get_fields()
+        undefined = []
+
+        for field_name, lookups in fields.items():
+            field = get_model_field(cls._meta.model, field_name)
+
+            # warn if the field doesn't exist.
+            if field is None:
+                undefined.append(field_name)
+
+            # ForeignObjectRel does not support non-exact lookups
+            if isinstance(field, ForeignObjectRel):
+                filters[field_name] = cls.filter_for_reverse_field(field, field_name)
+                continue
+
+            for lookup_expr in lookups:
+                filter_name = cls.get_filter_name(field_name, lookup_expr)
+
+                # If the filter is explicitly declared on the class, skip generation
+                if filter_name in cls.declared_filters:
+                    filters[filter_name] = cls.declared_filters[filter_name]
+                    continue
+
+                if field is not None:
+                    filters[filter_name] = cls.filter_for_field(field, field_name, lookup_expr)
+
+        # filter out declared filters
+        undefined = [f for f in undefined if f not in cls.declared_filters]
+        if undefined:
+            raise TypeError(
+                "'Meta.fields' contains fields that are not defined on this FilterSet: "
+                "%s" % ', '.join(undefined)
+            )
+
+        # Add in declared filters. This is necessary since we don't enforce adding
+        # declared filters to the 'Meta.fields' option
+        filters.update(cls.declared_filters)
+        return filters
+
+    @classmethod
+    def filter_for_field(cls, f, field_name, lookup_expr='exact'):
         f, lookup_type = resolve_field(f, lookup_expr)
 
         default = {
-            'name': name,
-            'label': capfirst(f.verbose_name),
-            'lookup_expr': lookup_expr
+            'field_name': field_name,
+            'lookup_expr': lookup_expr,
         }
 
         filter_class, params = cls.filter_for_lookup(f, lookup_type)
@@ -471,19 +354,18 @@ class BaseFilterSet(object):
 
         assert filter_class is not None, (
             "%s resolved field '%s' with '%s' lookup to an unrecognized field "
-            "type %s. Try adding an override to 'filter_overrides'. See: "
-            "https://django-filter.readthedocs.io/en/latest/usage.html#overriding-default-filters"
-        ) % (cls.__name__, name, lookup_expr, f.__class__.__name__)
+            "type %s. Try adding an override to 'Meta.filter_overrides'. See: "
+            "https://django-filter.readthedocs.io/en/develop/ref/filterset.html#customise-filter-generation-with-filter-overrides"
+        ) % (cls.__name__, field_name, lookup_expr, f.__class__.__name__)
 
         return filter_class(**default)
 
     @classmethod
-    def filter_for_reverse_field(cls, f, name):
+    def filter_for_reverse_field(cls, f, field_name):
         rel = remote_field(f.field)
         queryset = f.field.model._default_manager.all()
         default = {
-            'name': name,
-            'label': capfirst(rel.related_name),
+            'field_name': field_name,
             'queryset': queryset,
         }
         if rel.multiple:
@@ -493,8 +375,9 @@ class BaseFilterSet(object):
 
     @classmethod
     def filter_for_lookup(cls, f, lookup_type):
-        DEFAULTS = dict(FILTER_FOR_DBFIELD_DEFAULTS)
-        DEFAULTS.update(cls.filter_overrides)
+        DEFAULTS = dict(cls.FILTER_DEFAULTS)
+        if hasattr(cls, '_meta'):
+            DEFAULTS.update(cls._meta.filter_overrides)
 
         data = try_dbfield(DEFAULTS.get, f.__class__) or {}
         filter_class = data.get('filter_class')
@@ -565,8 +448,8 @@ class FilterSet(six.with_metaclass(FilterSetMetaclass, BaseFilterSet)):
     pass
 
 
-def filterset_factory(model):
-    meta = type(str('Meta'), (object,), {'model': model, 'fields': '__all__'})
+def filterset_factory(model, fields=ALL_FIELDS):
+    meta = type(str('Meta'), (object,), {'model': model, 'fields': fields})
     filterset = type(str('%sFilterSet' % model._meta.object_name),
                      (FilterSet,), {'Meta': meta})
     return filterset

@@ -1,5 +1,145 @@
+Version 1.1 (2017-10-19)
+------------------------
+
+* Add Deprecations for 2.0 (#792)
+* Improve IsoDateTimeField test clarity (#790)
+* Fix form attr references in tests (#789)
+* Simplify tox config, drop python 3.3 & django 1.8 (#787)
+* Make get_filter_name a classmethod, allowing it to be overriden for each FilterClass (#775)
+* Support active timezone (#750)
+* Docs Typo: django_filters -> filters in docs (#773)
+* Add Polish translations for some messages (#771)
+* Remove support for Django 1.9 (EOL) (#752)
+* Use required attribute from field when getting schema fields (#766)
+* Prevent circular ImportError hiding for rest_framework sub-package (#741)
+* Deprecate 'extra' field attrs on Filter (#734)
+* Add SuffixedMultiWidget (#681)
+* Fix null filtering for *Choice filters (#680)
+* Use isort on imports (#761)
+* Use urlencode from django.utils.http (#760)
+* Remove OrderingFilter.help_text (#757)
+* Update DRF test dependency to 3.6 (#747)
+
+
+Version 1.0.4 (2017-05-19)
+--------------------------
+
+Quick fix for verbose_field_name issue from 1.0.3 (#722)
+
+
+Version 1.0.3 (2017-05-16)
+--------------------------
+
+Improves compatibility with Django REST Framework schema generation.
+
+See the `1.0.3 Milestone`__ for full details.
+
+__ https://github.com/carltongibson/django-filter/milestone/13?closed=1
+
+
+
+Version 1.0.2 (2017-03-20)
+--------------------------
+
+Updates for compatibility with Django 1.11 and Django REST Framework 3.6.
+
+Adds CI testing against Python 3.6
+
+See the `1.0.2 Milestone`__ for full details.
+
+__ https://github.com/carltongibson/django-filter/milestone/12?closed=1
+
+
+Version 1.0.1 (2016-11-28)
+--------------------------
+
+Small release to ease compatibility with DRF:
+
+* #568 Adds ``rest_framework`` to the ``django_filters`` namespace to allow single
+  ``import django_filters` usage.
+* A number of small updates to the docs
+
+
+Version 1.0 (2016-11-17)
+------------------------
+
+This release removes all the deprecated code from 0.14 and 0.15 for 1.0 #480.
+
+Please see the `Migration Notes`__ for details of how to migrate.
+Stick with 0.15.3 if you're not ready to update.
+
+__ https://github.com/carltongibson/django-filter/blob/1.0.0/docs/guide/migration.txt
+
+The release includes a number of small fixes and documentation updates.
+
+See the `1.0 Milestone`__ for full details.
+
+__ https://github.com/carltongibson/django-filter/milestone/8?closed=1
+
+
+Version 0.15.3 (2016-10-17)
+---------------------------
+
+Adds compatibility for DRF (3.5+) get_schema_fields filter backend
+introspection.
+
+* #492 Port get_schema_fields from DRF
+
+
+Version 0.15.2 (2016-09-29)
+---------------------------
+
+* #507 Fix compatibility issue when not using the DTL
+
+
+Version 0.15.1 (2016-09-28)
+---------------------------
+
+A couple of quick bug fixes:
+
+* #496 OrderingFilter not working with Select widget
+
+* #498 DRF Backend Templates not loading
+
+
+
+Version 0.15.0 (2016-09-20)
+---------------------------
+
+This is a preparatory release for a 1.0. Lots of clean-up, lots of changes,
+mostly backwards compatible.
+
+Special thanks to Ryan P Kilby (@rpkilby) for lots of hard work.
+
+Most changes should raise a Deprecation Warning.
+
+**Note**: if you're doing *Clever Things™* with the various filter options
+— ``filter_overrides`` etc — you may run into an `AttributeError` since these
+are now defined on the metaclass and not on the filter itself.
+(See the discussion on #459)
+
+Summary: Highly Recommended, but take a moment to ensure everything still works.
+
+* Added the DRF backend. #481
+
+* Deprecated `MethodFilter` in favour of `Filter.method` #382
+
+* Move filter options to metaclass #459
+
+* Added `get_filter_predicate` hook. (Allows e.g. filtering on annotated fields) #469
+
+* Rework Ordering options into a filter #472
+
+* Hardened all deprecations for 1.0. Please do see the `Migration Notes`__
+
+__ https://github.com/carltongibson/django-filter/blob/1.0.0/docs/guide/migration.txt
+
+
+
 Version 0.14.0 (2016-08-14)
 ---------------------------
+
+* Confirmed support for Django 1.10.
 
 * Add support for filtering on DurationField (new in Django 1.8).
 
@@ -14,6 +154,7 @@ Version 0.14.0 (2016-08-14)
 * Fix distinct behavior for range filters
 
 * Various Minor Clean up issues.
+
 
 Version 0.13.0 (2016-03-11)
 ---------------------------

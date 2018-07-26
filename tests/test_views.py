@@ -1,12 +1,11 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase, override_settings
 from django.test.client import RequestFactory
 
-from django_filters.views import FilterView
 from django_filters.filterset import FilterSet, filterset_factory
+from django_filters.views import FilterView
 
 from .models import Book
 
@@ -47,6 +46,33 @@ class GenericClassBasedViewTests(GenericViewTestCase):
         for b in ['Ender&#39;s Game', 'Rainbow Six', 'Snowcrash']:
             self.assertContains(response, b)
 
+    def test_view_with_model_no_filterset(self):
+        factory = RequestFactory()
+        request = factory.get(self.base_url)
+        view = FilterView.as_view(model=Book)
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        for b in ['Ender&#39;s Game', 'Rainbow Six', 'Snowcrash']:
+            self.assertContains(response, b)
+
+    def test_view_with_model_and_fields_no_filterset(self):
+        factory = RequestFactory()
+        request = factory.get(self.base_url + '?price=1.0')
+        view = FilterView.as_view(model=Book, filter_fields=['price'])
+
+        # filtering only by price
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        for b in ['Ender&#39;s Game', 'Rainbow Six', 'Snowcrash']:
+            self.assertContains(response, b)
+
+        # not filtering by title
+        request = factory.get(self.base_url + '?title=Snowcrash')
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        for b in ['Ender&#39;s Game', 'Rainbow Six', 'Snowcrash']:
+            self.assertContains(response, b)
+
     def test_view_without_filterset_or_model(self):
         factory = RequestFactory()
         request = factory.get(self.base_url)
@@ -72,6 +98,9 @@ class GenericFunctionalViewTests(GenericViewTestCase):
         response = self.client.get(self.base_url)
         for b in ['Ender&#39;s Game', 'Rainbow Six', 'Snowcrash']:
             self.assertContains(response, b)
+        # extra context
+        self.assertEqual(response.context_data['foo'], 'bar')
+        self.assertEqual(response.context_data['bar'], 'foo')
 
     def test_view_filtering_on_price(self):
         response = self.client.get(self.base_url + '?title=Snowcrash')

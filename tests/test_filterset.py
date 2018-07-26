@@ -6,40 +6,44 @@ import unittest
 import django
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
-from django_filters.filterset import FilterSet
-from django_filters.filterset import FILTER_FOR_DBFIELD_DEFAULTS
-from django_filters.filterset import STRICTNESS
-from django_filters.filters import BooleanFilter
-from django_filters.filters import CharFilter
-from django_filters.filters import NumberFilter
-from django_filters.filters import ChoiceFilter
-from django_filters.filters import ModelChoiceFilter
-from django_filters.filters import ModelMultipleChoiceFilter
-from django_filters.filters import UUIDFilter
-from django_filters.filters import BaseInFilter
-from django_filters.filters import BaseRangeFilter
-
+from django_filters.constants import STRICTNESS
+from django_filters.filters import (
+    BaseInFilter,
+    BaseRangeFilter,
+    BooleanFilter,
+    CharFilter,
+    ChoiceFilter,
+    DateRangeFilter,
+    Filter,
+    FilterMethod,
+    ModelChoiceFilter,
+    ModelMultipleChoiceFilter,
+    NumberFilter,
+    UUIDFilter
+)
+from django_filters.filterset import FILTER_FOR_DBFIELD_DEFAULTS, FilterSet
 from django_filters.widgets import BooleanWidget
 
-from .models import User
-from .models import AdminUser
-from .models import Article
-from .models import Book
-from .models import Profile
-from .models import Comment
-from .models import Restaurant
-from .models import NetworkSetting
-from .models import SubnetMaskField
-from .models import Account
-from .models import BankAccount
-from .models import Node
-from .models import DirectedNode
-from .models import Worker
-from .models import HiredWorker
-from .models import Business
-from .models import UUIDTestModel
+from .models import (
+    Account,
+    AdminUser,
+    Article,
+    BankAccount,
+    Book,
+    Business,
+    Comment,
+    DirectedNode,
+    NetworkSetting,
+    Node,
+    Profile,
+    Restaurant,
+    SubnetMaskField,
+    User,
+    UUIDTestModel,
+    Worker
+)
 
 
 def checkItemsEqual(L1, L2):
@@ -227,14 +231,15 @@ class FilterSetFilterForLookupTests(TestCase):
 
     def test_isnull_with_filter_overrides(self):
         class OFilterSet(FilterSet):
-            filter_overrides = {
-                models.BooleanField: {
-                    'filter_class': BooleanFilter,
-                    'extra': lambda f: {
-                        'widget': BooleanWidget,
+            class Meta:
+                filter_overrides = {
+                    models.BooleanField: {
+                        'filter_class': BooleanFilter,
+                        'extra': lambda f: {
+                            'widget': BooleanWidget,
+                        },
                     },
-                },
-            }
+                }
 
         f = Article._meta.get_field('author')
         result, params = OFilterSet.filter_for_lookup(f, 'isnull')
@@ -319,6 +324,39 @@ class FilterSetClassCreationTests(TestCase):
         self.assertListEqual(list(F.base_filters),
                              ['title', 'price', 'average_rating'])
 
+    def test_model_no_fields_or_exclude(self):
+        with self.assertRaises(AssertionError) as excinfo:
+            class F(FilterSet):
+                class Meta:
+                    model = Book
+
+        self.assertIn(
+            "Setting 'Meta.model' without either 'Meta.fields' or 'Meta.exclude'",
+            str(excinfo.exception)
+        )
+
+    def test_model_fields_empty(self):
+        class F(FilterSet):
+            class Meta:
+                model = Book
+                fields = []
+
+        self.assertEqual(len(F.declared_filters), 0)
+        self.assertEqual(len(F.base_filters), 0)
+        self.assertListEqual(list(F.base_filters), [])
+
+    def test_model_exclude_empty(self):
+        # equivalent to fields = '__all__'
+        class F(FilterSet):
+            class Meta:
+                model = Book
+                exclude = []
+
+        self.assertEqual(len(F.declared_filters), 0)
+        self.assertEqual(len(F.base_filters), 3)
+        self.assertListEqual(list(F.base_filters),
+                             ['title', 'price', 'average_rating'])
+
     def test_declared_and_model_derived(self):
         class F(FilterSet):
             username = CharFilter()
@@ -392,9 +430,13 @@ class FilterSetClassCreationTests(TestCase):
 
                 class Meta:
                     model = Book
-                    fields = ('username', 'price', 'other')
-        self.assertEqual(excinfo.exception.args, (
-            "Meta.fields contains a field that isn't defined on this FilterSet: other",))
+                    fields = ('username', 'price', 'other', 'another')
+
+        self.assertEqual(
+            str(excinfo.exception),
+            "'Meta.fields' contains fields that are not defined on this FilterSet: "
+            "other, another"
+        )
 
     def test_meta_fields_dictionary_containing_unknown(self):
         with self.assertRaises(TypeError):
@@ -405,7 +447,7 @@ class FilterSetClassCreationTests(TestCase):
                     fields = {'id': ['exact'],
                               'title': ['exact'],
                               'other': ['exact'],
-                             }
+                              }
 
     def test_meta_exlude_with_declared_and_declared_wins(self):
         class F(FilterSet):
@@ -483,14 +525,25 @@ class FilterSetClassCreationTests(TestCase):
 
     def test_custom_field_gets_filter_from_override(self):
         class F(FilterSet):
-            filter_overrides = {
-                SubnetMaskField: {'filter_class': CharFilter}}
-
             class Meta:
                 model = NetworkSetting
                 fields = '__all__'
 
-        self.assertEqual(list(F.base_filters.keys()), ['ip', 'mask'])
+                filter_overrides = {
+                    SubnetMaskField: {'filter_class': CharFilter}
+                }
+
+        self.assertEqual(list(F.base_filters.keys()), ['ip', 'mask', 'cidr'])
+
+    def test_custom_declared_field_no_warning(self):
+        class F(FilterSet):
+            mask = CharFilter()
+
+            class Meta:
+                model = NetworkSetting
+                fields = ['mask']
+
+        self.assertEqual(list(F.base_filters.keys()), ['mask'])
 
     def test_filterset_for_proxy_model(self):
         class F(FilterSet):
@@ -520,6 +573,21 @@ class FilterSetClassCreationTests(TestCase):
         self.assertEqual(
             list(F.base_filters) + ['amount_saved'],
             list(FtiF.base_filters))
+
+    def test_declared_filter_disabling(self):
+        class Parent(FilterSet):
+            f1 = CharFilter()
+            f2 = CharFilter()
+
+        class Child(Parent):
+            f1 = None
+
+        class Grandchild(Child):
+            pass
+
+        self.assertEqual(len(Parent.base_filters), 2)
+        self.assertEqual(len(Child.base_filters), 1)
+        self.assertEqual(len(Grandchild.base_filters), 1)
 
 
 class FilterSetInstantiationTests(TestCase):
@@ -559,189 +627,58 @@ class FilterSetInstantiationTests(TestCase):
         f = F(queryset=m)
         self.assertEqual(f.queryset, m)
 
-
-class FilterSetOrderingTests(TestCase):
-
-    def setUp(self):
-        self.alex = User.objects.create(username='alex', status=1)
-        self.jacob = User.objects.create(username='jacob', status=2)
-        self.aaron = User.objects.create(username='aaron', status=2)
-        self.carl = User.objects.create(username='carl', status=0)
-        # user_ids = list(User.objects.all().values_list('pk', flat=True))
-        self.qs = User.objects.all().order_by('id')
-
-    def test_ordering_when_unbound(self):
+    def test_creating_with_request(self):
         class F(FilterSet):
             class Meta:
                 model = User
-                fields = ['username', 'status']
-                order_by = ['status']
+                fields = ['username']
 
-        f = F(queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['carl', 'alex', 'jacob', 'aaron'], lambda o: o.username)
+        m = mock.Mock()
+        f = F(request=m)
+        self.assertEqual(f.request, m)
 
-    def test_ordering(self):
+
+class FilterSetStrictnessTests(TestCase):
+
+    def test_settings_default(self):
         class F(FilterSet):
             class Meta:
                 model = User
-                fields = ['username', 'status']
-                order_by = ['username', 'status']
+                fields = []
 
-        f = F({'o': 'username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['aaron', 'alex', 'carl', 'jacob'], lambda o: o.username)
+        # Ensure default is not IGNORE
+        self.assertEqual(F().strict, STRICTNESS.RETURN_NO_RESULTS)
 
-        f = F({'o': 'status'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['carl', 'alex', 'jacob', 'aaron'], lambda o: o.username)
+        # override and test
+        with override_settings(FILTERS_STRICTNESS=STRICTNESS.IGNORE):
+            self.assertEqual(F().strict, STRICTNESS.IGNORE)
 
-    def test_ordering_on_unknown_value(self):
+    def test_meta_value(self):
         class F(FilterSet):
             class Meta:
                 model = User
-                fields = ['username', 'status']
-                order_by = ['status']
+                fields = []
+                strict = STRICTNESS.IGNORE
 
-        f = F({'o': 'username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, [], lambda o: o.username)
+        self.assertEqual(F().strict, STRICTNESS.IGNORE)
 
-    def test_ordering_on_unknown_value_results_in_default_ordering_without_strict(self):
-        class F(FilterSet):
-            strict = STRICTNESS.IGNORE
-
-            class Meta:
-                model = User
-                fields = ['username', 'status']
-                order_by = ['status']
-
-        self.assertFalse(F.strict)
-        f = F({'o': 'username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['alex', 'jacob', 'aaron', 'carl'], lambda o: o.username)
-
-    def test_ordering_on_unknown_value_results_in_default_ordering_with_strict_raise(self):
-        class F(FilterSet):
-            strict = STRICTNESS.RAISE_VALIDATION_ERROR
-
-            class Meta:
-                model = User
-                fields = ['username', 'status']
-                order_by = ['status']
-
-        f = F({'o': 'username'}, queryset=self.qs)
-        with self.assertRaises(ValidationError) as excinfo:
-            f.qs.all()
-        self.assertEqual(excinfo.exception.message_dict,
-                         {'o': ['Select a valid choice. username is not one '
-                                'of the available choices.']})
-
-        # No default order_by should get applied.
-        f = F({}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['alex', 'jacob', 'aaron', 'carl'], lambda o: o.username)
-
-    def test_ordering_on_different_field(self):
+    def test_init_default(self):
         class F(FilterSet):
             class Meta:
                 model = User
-                fields = ['username', 'status']
-                order_by = True
+                fields = []
+                strict = STRICTNESS.IGNORE
 
-        f = F({'o': 'username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['aaron', 'alex', 'carl', 'jacob'], lambda o: o.username)
+        strict = STRICTNESS.RAISE_VALIDATION_ERROR
+        self.assertEqual(F(strict=strict).strict, strict)
 
-        f = F({'o': 'status'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['carl', 'alex', 'jacob', 'aaron'], lambda o: o.username)
-
-    def test_ordering_uses_filter_name(self):
-        class F(FilterSet):
-            account = CharFilter(name='username')
-            class Meta:
-                model = User
-                fields = ['account', 'status']
-                order_by = True
-
-        f = F({'o': 'account'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['aaron', 'alex', 'carl', 'jacob'], lambda o: o.username)
-
-    def test_reverted_ordering_uses_filter_name(self):
-        class F(FilterSet):
-            account = CharFilter(name='username')
-            class Meta:
-                model = User
-                fields = ['account', 'status']
-                order_by = True
-
-        f = F({'o': '-account'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['jacob', 'carl', 'alex', 'aaron'], lambda o: o.username)
-
-    def test_ordering_with_overridden_field_name(self):
-        """
-        Set the `order_by_field` on the queryset and ensure that the
-        field name is respected.
-        """
-        class F(FilterSet):
-            order_by_field = 'order'
-
-            class Meta:
-                model = User
-                fields = ['username', 'status']
-                order_by = ['status']
-
-        f = F({'order': 'status'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['carl', 'alex', 'jacob', 'aaron'], lambda o: o.username)
-
-    def test_ordering_descending_set(self):
+    def test_legacy_value(self):
         class F(FilterSet):
             class Meta:
                 model = User
-                fields = ['username', 'status']
-                order_by = ['username', '-username']
+                fields = []
 
-        f = F({'o': '-username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['jacob', 'carl', 'alex', 'aaron'], lambda o: o.username)
-
-    def test_ordering_descending_unset(self):
-        """ Test ordering descending works when order_by=True. """
-        class F(FilterSet):
-            class Meta:
-                model = User
-                fields = ['username', 'status']
-                order_by = True
-
-        f = F({'o': '-username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['jacob', 'carl', 'alex', 'aaron'], lambda o: o.username)
-
-    def test_custom_ordering(self):
-
-        class F(FilterSet):
-            debug = True
-            class Meta:
-                model = User
-                fields = ['username', 'status']
-                order_by = ['username', 'status']
-
-            def get_order_by(self, order_choice):
-                if order_choice == 'status':
-                    return ['status', 'username']
-                return super(F, self).get_order_by(order_choice)
-
-        f = F({'o': 'username'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['aaron', 'alex', 'carl', 'jacob'], lambda o: o.username)
-
-        f = F({'o': 'status'}, queryset=self.qs)
-        self.assertQuerysetEqual(
-            f.qs, ['carl', 'alex', 'aaron', 'jacob'], lambda o: o.username)
+        self.assertEqual(F(strict=False).strict, STRICTNESS.IGNORE)
 
 
 class FilterSetTogetherTests(TestCase):
@@ -760,11 +697,15 @@ class FilterSetTogetherTests(TestCase):
                     ('username', 'status'),
                     ('first_name', 'is_active'),
                 ]
+                strict = STRICTNESS.RAISE_VALIDATION_ERROR
 
         f = F({}, queryset=self.qs)
         self.assertEqual(f.qs.count(), 2)
+
         f = F({'username': 'alex'}, queryset=self.qs)
-        self.assertEqual(f.qs.count(), 0)
+        with self.assertRaises(ValidationError):
+            f.qs.count()
+
         f = F({'username': 'alex', 'status': 1}, queryset=self.qs)
         self.assertEqual(f.qs.count(), 1)
         self.assertQuerysetEqual(f.qs, [self.alex.pk], lambda o: o.pk)
@@ -775,17 +716,164 @@ class FilterSetTogetherTests(TestCase):
                 model = User
                 fields = ['username', 'status']
                 together = ['username', 'status']
+                strict = STRICTNESS.RAISE_VALIDATION_ERROR
 
         f = F({}, queryset=self.qs)
         self.assertEqual(f.qs.count(), 2)
+
         f = F({'username': 'alex'}, queryset=self.qs)
-        self.assertEqual(f.qs.count(), 0)
+        with self.assertRaises(ValidationError):
+            f.qs.count()
+
         f = F({'username': 'alex', 'status': 1}, queryset=self.qs)
         self.assertEqual(f.qs.count(), 1)
         self.assertQuerysetEqual(f.qs, [self.alex.pk], lambda o: o.pk)
 
+    def test_empty_values(self):
+        class F(FilterSet):
+            class Meta:
+                model = User
+                fields = ['username', 'status']
+                together = ['username', 'status']
 
-@unittest.skip('TODO: remove when relevant deprecations have been completed')
+        f = F({'username': '', 'status': ''}, queryset=self.qs)
+        self.assertEqual(f.qs.count(), 2)
+        f = F({'username': 'alex', 'status': ''}, queryset=self.qs)
+        self.assertEqual(f.qs.count(), 0)
+
+
+# test filter.method here, as it depends on its parent FilterSet
+class FilterMethodTests(TestCase):
+
+    def test_none(self):
+        # use a mock to bypass bound/unbound method equality
+        class TestFilter(Filter):
+            filter = mock.Mock()
+
+        f = TestFilter(method=None)
+        self.assertIsNone(f.method)
+
+        # passing method=None should not modify filter function
+        self.assertIs(f.filter, TestFilter.filter)
+
+    def test_method_name(self):
+        class F(FilterSet):
+            f = Filter(method='filter_f')
+
+            def filter_f(self, qs, name, value):
+                pass
+
+        f = F({}, queryset=User.objects.all())
+        self.assertEqual(f.filters['f'].method, 'filter_f')
+        self.assertEqual(f.filters['f'].filter.method, f.filter_f)
+        self.assertIsInstance(f.filters['f'].filter, FilterMethod)
+
+    def test_method_callable(self):
+        def filter_f(qs, name, value):
+            pass
+
+        class F(FilterSet):
+            f = Filter(method=filter_f)
+
+        f = F({}, queryset=User.objects.all())
+        self.assertEqual(f.filters['f'].method, filter_f)
+        self.assertEqual(f.filters['f'].filter.method, filter_f)
+        self.assertIsInstance(f.filters['f'].filter, FilterMethod)
+
+    def test_request_available_during_method_called(self):
+        class F(FilterSet):
+            f = Filter(method='filter_f')
+
+            def filter_f(self, qs, name, value):
+                # call mock request object to prove self.request can be accessed
+                self.request()
+
+        m = mock.Mock()
+        f = F({}, queryset=User.objects.all(), request=m)
+        # call the filter
+        f.filters['f'].filter.method(User.objects.all(), 'f', '')
+        m.assert_called_once_with()
+
+    def test_method_with_overridden_filter(self):
+        # Some filter classes override the base filter() method. We need
+        # to ensure that passing a method argument still works correctly
+        class F(FilterSet):
+            f = DateRangeFilter(method='filter_f')
+
+            def filter_f(self, qs, name, value):
+                pass
+
+        f = F({}, queryset=User.objects.all())
+        self.assertEqual(f.filters['f'].method, 'filter_f')
+        self.assertEqual(f.filters['f'].filter.method, f.filter_f)
+
+    def test_parent_unresolvable(self):
+        f = Filter(method='filter_f')
+        with self.assertRaises(AssertionError) as w:
+            f.filter(User.objects.all(), 0)
+
+        self.assertIn("'None'", str(w.exception))
+        self.assertIn('parent', str(w.exception))
+        self.assertIn('filter_f', str(w.exception))
+
+    def test_method_self_is_parent(self):
+        # Ensure the method isn't 're-parented' on the `FilterMethod` helper class.
+        # Filter methods should have access to the filterset's properties.
+        request = mock.Mock()
+
+        class F(FilterSet):
+            f = CharFilter(method='filter_f')
+
+            class Meta:
+                model = User
+                fields = []
+
+            def filter_f(inner_self, qs, name, value):
+                self.assertIsInstance(inner_self, F)
+                self.assertIs(inner_self.request, request)
+
+        F({'f': 'foo'}, request=request, queryset=User.objects.all()).qs
+
+    def test_method_unresolvable(self):
+        class F(FilterSet):
+            f = Filter(method='filter_f')
+
+        f = F({}, queryset=User.objects.all())
+
+        with self.assertRaises(AssertionError) as w:
+            f.filters['f'].filter(User.objects.all(), 0)
+
+        self.assertIn('%s.%s' % (F.__module__, F.__name__), str(w.exception))
+        self.assertIn('.filter_f()', str(w.exception))
+
+    def test_method_uncallable(self):
+        class F(FilterSet):
+            f = Filter(method='filter_f')
+            filter_f = 4
+
+        f = F({}, queryset=User.objects.all())
+
+        with self.assertRaises(AssertionError) as w:
+            f.filters['f'].filter(User.objects.all(), 0)
+
+        self.assertIn('%s.%s' % (F.__module__, F.__name__), str(w.exception))
+        self.assertIn('.filter_f()', str(w.exception))
+
+    def test_method_set_unset(self):
+        # use a mock to bypass bound/unbound method equality
+        class TestFilter(Filter):
+            filter = mock.Mock()
+
+        f = TestFilter(method='filter_f')
+        self.assertEqual(f.method, 'filter_f')
+        self.assertIsInstance(f.filter, FilterMethod)
+
+        # setting None should revert to Filter.filter
+        f.method = None
+        self.assertIsNone(f.method)
+        self.assertIs(f.filter, TestFilter.filter)
+
+
 class MiscFilterSetTests(TestCase):
 
     def test_no__getitem__(self):

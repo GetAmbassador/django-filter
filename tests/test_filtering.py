@@ -1,51 +1,51 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import datetime
 import mock
 import unittest
 
 import django
+from django import forms
 from django.test import TestCase, override_settings
-from django.utils import six
+from django.utils import six, timezone
 from django.utils.timezone import now
-from django.utils import timezone
 
-from django_filters.filterset import FilterSet
-from django_filters.filters import AllValuesFilter
-from django_filters.filters import AllValuesMultipleFilter
-from django_filters.filters import CharFilter
-from django_filters.filters import ChoiceFilter
-from django_filters.filters import DateRangeFilter
-from django_filters.filters import DateFromToRangeFilter
-from django_filters.filters import DateTimeFromToRangeFilter
-# from django_filters.filters import DateTimeFilter
-from django_filters.filters import DurationFilter
-from django_filters.filters import MethodFilter
-from django_filters.filters import MultipleChoiceFilter
-from django_filters.filters import ModelMultipleChoiceFilter
-from django_filters.filters import NumberFilter
-from django_filters.filters import RangeFilter
-from django_filters.filters import TimeRangeFilter
-# from django_filters.widgets import LinkWidget
 from django_filters.exceptions import FieldLookupError
+from django_filters.filters import (
+    AllValuesFilter,
+    AllValuesMultipleFilter,
+    CharFilter,
+    ChoiceFilter,
+    DateFromToRangeFilter,
+    DateRangeFilter,
+    DateTimeFromToRangeFilter,
+    DurationFilter,
+    ModelChoiceFilter,
+    ModelMultipleChoiceFilter,
+    MultipleChoiceFilter,
+    NumberFilter,
+    OrderingFilter,
+    RangeFilter,
+    TimeRangeFilter,
+    TypedMultipleChoiceFilter
+)
+from django_filters.filterset import FilterSet
 
-from .models import User
-from .models import Comment
-from .models import Book
-# from .models import Restaurant
-from .models import Article
-# from .models import NetworkSetting
-# from .models import SubnetMaskField
-from .models import Company
-from .models import Location
-from .models import Account
-from .models import BankAccount
-from .models import Profile
-from .models import Node
-from .models import DirectedNode
-from .models import STATUS_CHOICES
-from .models import SpacewalkRecord
+from .models import (
+    STATUS_CHOICES,
+    Account,
+    Article,
+    BankAccount,
+    Book,
+    Comment,
+    Company,
+    DirectedNode,
+    Location,
+    Node,
+    Profile,
+    SpacewalkRecord,
+    User
+)
 
 
 class CharFilterTests(TestCase):
@@ -128,12 +128,20 @@ class BooleanFilterTests(TestCase):
 
 class ChoiceFilterTests(TestCase):
 
-    def test_filtering(self):
+    @classmethod
+    def setUpTestData(cls):
         User.objects.create(username='alex', status=1)
         User.objects.create(username='jacob', status=2)
         User.objects.create(username='aaron', status=2)
         User.objects.create(username='carl', status=0)
 
+        Article.objects.create(author_id=1, published=now())
+        Article.objects.create(author_id=2, published=now())
+        Article.objects.create(author_id=3, published=now())
+        Article.objects.create(author_id=4, published=now())
+        Article.objects.create(author_id=None, published=now())
+
+    def test_filtering(self):
         class F(FilterSet):
             class Meta:
                 model = User
@@ -152,7 +160,6 @@ class ChoiceFilterTests(TestCase):
 
         f = F({'status': '0'})
         self.assertQuerysetEqual(f.qs, ['carl'], lambda o: o.username, False)
-
 
     def test_filtering_on_explicitly_defined_field(self):
         """
@@ -160,13 +167,9 @@ class ChoiceFilterTests(TestCase):
 
         If you explicitly declare ChoiceFilter fields you **MUST** pass `choices`.
         """
-        User.objects.create(username='alex', status=1)
-        User.objects.create(username='jacob', status=2)
-        User.objects.create(username='aaron', status=2)
-        User.objects.create(username='carl', status=0)
-
         class F(FilterSet):
             status = ChoiceFilter(choices=STATUS_CHOICES)
+
             class Meta:
                 model = User
                 fields = ['status']
@@ -185,6 +188,37 @@ class ChoiceFilterTests(TestCase):
         f = F({'status': '0'})
         self.assertQuerysetEqual(f.qs, ['carl'], lambda o: o.username, False)
 
+    def test_filtering_on_empty_choice(self):
+        class F(FilterSet):
+            class Meta:
+                model = User
+                fields = ['status']
+
+        f = F({'status': ''})
+        self.assertQuerysetEqual(f.qs,
+                                 ['aaron', 'alex', 'jacob', 'carl'],
+                                 lambda o: o.username, False)
+
+    def test_filtering_on_null_choice(self):
+        choices = [(u.pk, str(u)) for u in User.objects.order_by('id')]
+
+        class F(FilterSet):
+            author = ChoiceFilter(
+                choices=choices,
+                null_value='null',
+                null_label='NULL',
+            )
+
+            class Meta:
+                model = Article
+                fields = ['author']
+
+        # sanity check to make sure the filter is setup correctly
+        f = F({'author': '1'})
+        self.assertQuerysetEqual(f.qs, ['alex'], lambda o: str(o.author), False)
+
+        f = F({'author': 'null'})
+        self.assertQuerysetEqual(f.qs, [None], lambda o: o.author, False)
 
 
 class MultipleChoiceFilterTests(TestCase):
@@ -219,6 +253,79 @@ class MultipleChoiceFilterTests(TestCase):
         f = F({'status': ['0', '1', '2']}, queryset=qs)
         self.assertQuerysetEqual(
             f.qs, ['aaron', 'alex', 'carl', 'jacob'], lambda o: o.username)
+
+    def test_filtering_on_null_choice(self):
+        User.objects.create(username='alex', status=1)
+        User.objects.create(username='jacob', status=2)
+        User.objects.create(username='aaron', status=2)
+        User.objects.create(username='carl', status=0)
+
+        Article.objects.create(author_id=1, published=now())
+        Article.objects.create(author_id=2, published=now())
+        Article.objects.create(author_id=3, published=now())
+        Article.objects.create(author_id=4, published=now())
+        Article.objects.create(author_id=None, published=now())
+
+        choices = [(u.pk, str(u)) for u in User.objects.order_by('id')]
+
+        class F(FilterSet):
+            author = MultipleChoiceFilter(
+                choices=choices,
+                null_value='null',
+                null_label='NULL',
+            )
+
+            class Meta:
+                model = Article
+                fields = ['author']
+
+        # sanity check to make sure the filter is setup correctly
+        f = F({'author': ['1']})
+        self.assertQuerysetEqual(f.qs, ['alex'], lambda o: str(o.author), False)
+
+        f = F({'author': ['null']})
+        self.assertQuerysetEqual(f.qs, [None], lambda o: o.author, False)
+
+        f = F({'author': ['1', 'null']})
+        self.assertQuerysetEqual(
+            f.qs, ['alex', None],
+            lambda o: o.author and str(o.author),
+            False)
+
+
+class TypedMultipleChoiceFilterTests(TestCase):
+
+    def test_filtering(self):
+        User.objects.create(username='alex', status=1)
+        User.objects.create(username='jacob', status=2)
+        User.objects.create(username='aaron', status=2)
+        User.objects.create(username='carl', status=0)
+
+
+        class F(FilterSet):
+            status = TypedMultipleChoiceFilter(choices=STATUS_CHOICES, coerce=lambda x: x[0:2])
+
+            class Meta:
+                model = User
+                fields = ['status']
+
+        qs = User.objects.all().order_by('username')
+        f = F(queryset=qs)
+        self.assertQuerysetEqual(
+            f.qs, ['aa', 'ja', 'al', 'ca'],
+            lambda o: o.username[0:2], False)
+
+        f = F({'status': ['0']}, queryset=qs)
+        self.assertQuerysetEqual(
+            f.qs, ['ca'], lambda o: o.username[0:2])
+
+        f = F({'status': ['0', '1']}, queryset=qs)
+        self.assertQuerysetEqual(
+            f.qs, ['al', 'ca'], lambda o: o.username[0:2])
+
+        f = F({'status': ['0', '1', '2']}, queryset=qs)
+        self.assertQuerysetEqual(
+            f.qs, ['aa', 'al', 'ca', 'ja'], lambda o: o.username[0:2])
 
 
 class DateFilterTests(TestCase):
@@ -418,6 +525,49 @@ class ModelChoiceFilterTests(TestCase):
         f = F({'author': jacob.pk}, queryset=qs)
         self.assertQuerysetEqual(f.qs, [1, 3], lambda o: o.pk, False)
 
+    @override_settings(FILTERS_NULL_CHOICE_LABEL='No Author')
+    def test_filtering_null(self):
+        Article.objects.create(published=now())
+        alex = User.objects.create(username='alex')
+        Article.objects.create(author=alex, published=now())
+
+        class F(FilterSet):
+            class Meta:
+                model = Article
+                fields = ['author', 'name']
+
+        qs = Article.objects.all()
+        f = F({'author': 'null'}, queryset=qs)
+        self.assertQuerysetEqual(f.qs, [None], lambda o: o.author, False)
+
+    def test_callable_queryset(self):
+        # Sanity check for callable queryset arguments.
+        # Ensure that nothing is improperly cached
+        User.objects.create(username='alex')
+        jacob = User.objects.create(username='jacob')
+        aaron = User.objects.create(username='aaron')
+
+        def users(request):
+            return User.objects.filter(pk__lt=request.user.pk)
+
+        class F(FilterSet):
+            author = ModelChoiceFilter(name='author', queryset=users)
+
+            class Meta:
+                model = Comment
+                fields = ['author']
+
+        qs = Comment.objects.all()
+        request = mock.Mock()
+
+        request.user = jacob
+        f = F(queryset=qs, request=request).filters['author'].field
+        self.assertQuerysetEqual(f.queryset, [1], lambda o: o.pk, False)
+
+        request.user = aaron
+        f = F(queryset=qs, request=request).filters['author'].field
+        self.assertQuerysetEqual(f.queryset, [1, 2], lambda o: o.pk, False)
+
 
 class ModelMultipleChoiceFilterTests(TestCase):
 
@@ -433,8 +583,8 @@ class ModelMultipleChoiceFilterTests(TestCase):
                                  average_rating=3.0)
         Book.objects.create(title="Stranger in a Strage Land", price='1.00',
                             average_rating=3.0)
-        alex.favorite_books = [b1, b2]
-        aaron.favorite_books = [b1, b3]
+        alex.favorite_books.add(b1, b2)
+        aaron.favorite_books.add(b1, b3)
 
         self.alex = alex
 
@@ -456,6 +606,18 @@ class ModelMultipleChoiceFilterTests(TestCase):
 
         f = F({'favorite_books': ['4']}, queryset=qs)
         self.assertQuerysetEqual(f.qs, [], lambda o: o.username)
+
+    @override_settings(FILTERS_NULL_CHOICE_LABEL='No Favorites')
+    def test_filtering_null(self):
+        class F(FilterSet):
+            class Meta:
+                model = User
+                fields = ['favorite_books']
+
+        qs = User.objects.all()
+        f = F({'favorite_books': ['null']}, queryset=qs)
+
+        self.assertQuerysetEqual(f.qs, ['jacob'], lambda o: o.username)
 
     def test_filtering_dictionary(self):
         class F(FilterSet):
@@ -489,7 +651,7 @@ class ModelMultipleChoiceFilterTests(TestCase):
                     'queryset': Book.objects.filter(id__in=[1, 2])
                 })
 
-                self.filters['favorite_books'].required = True
+                self.filters['favorite_books'].extra['required'] = True
 
         qs = User.objects.all().order_by('username')
 
@@ -779,6 +941,92 @@ class DateFromToRangeFilterTests(TestCase):
             'published_1': '2016-01-03'})
         self.assertEqual(len(results.qs), 3)
 
+    @unittest.skipIf(django.VERSION < (1, 9), 'version doesnt supports is_dst parameter for make_aware')
+    @override_settings(TIME_ZONE='America/Sao_Paulo')
+    def test_filtering_dst_start_midnight(self):
+        tz = timezone.get_default_timezone()
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 14, 23, 59)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 15, 0, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 15, 1, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 16, 0, 0)))
+
+        class F(FilterSet):
+            published = DateFromToRangeFilter()
+
+            class Meta:
+                model = Article
+                fields = ['published']
+
+        results = F(data={
+            'published_0': '2017-10-15',
+            'published_1': '2017-10-15'})
+        self.assertEqual(len(results.qs), 2)
+
+    @unittest.skipIf(django.VERSION < (1, 9), 'version doesnt supports is_dst parameter for make_aware')
+    @override_settings(TIME_ZONE='America/Sao_Paulo')
+    def test_filtering_dst_ends_midnight(self):
+        tz = timezone.get_default_timezone()
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 2, 19, 0, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 2, 18, 23, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 2, 18, 0, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 2, 17, 15, 0)))
+
+        class F(FilterSet):
+            published = DateFromToRangeFilter()
+
+            class Meta:
+                model = Article
+                fields = ['published']
+
+        results = F(data={
+            'published_0': '2017-02-18',
+            'published_1': '2017-02-18'})
+        self.assertEqual(len(results.qs), 2)
+
+    @unittest.skipIf(django.VERSION < (1, 9), 'version doesnt supports is_dst parameter for make_aware')
+    @override_settings(TIME_ZONE='Europe/Paris')
+    def test_filtering_dst_start(self):
+        tz = timezone.get_default_timezone()
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 3, 25, 23, 59)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 3, 26, 0, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 3, 26, 2, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 3, 26, 3, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 3, 27, 0, 0)))
+
+        class F(FilterSet):
+            published = DateFromToRangeFilter()
+
+            class Meta:
+                model = Article
+                fields = ['published']
+
+        results = F(data={
+            'published_0': '2017-3-26',
+            'published_1': '2017-3-26'})
+        self.assertEqual(len(results.qs), 3)
+
+    @unittest.skipIf(django.VERSION < (1, 9), 'version doesnt supports is_dst parameter for make_aware')
+    @override_settings(TIME_ZONE='Europe/Paris')
+    def test_filtering_dst_end(self):
+        tz = timezone.get_default_timezone()
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 28, 23, 59)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 29, 0, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 29, 2, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 29, 3, 0)))
+        Article.objects.create(published=tz.localize(datetime.datetime(2017, 10, 30, 0, 0)))
+
+        class F(FilterSet):
+            published = DateFromToRangeFilter()
+
+            class Meta:
+                model = Article
+                fields = ['published']
+
+        results = F(data={
+            'published_0': '2017-10-29',
+            'published_1': '2017-10-29'})
+        self.assertEqual(len(results.qs), 3)
+
 
 class DateTimeFromToRangeFilterTests(TestCase):
 
@@ -857,11 +1105,11 @@ class AllValuesFilterTests(TestCase):
 
         class F(FilterSet):
             username = AllValuesFilter()
-            strict = False
 
             class Meta:
                 model = User
                 fields = ['username']
+                strict = False
 
         self.assertEqual(list(F().qs), list(User.objects.all()))
         self.assertEqual(list(F({'username': 'alex'}).qs),
@@ -893,24 +1141,23 @@ class AllValuesMultipleFilterTests(TestCase):
                          list())
 
 
-class MethodFilterTests(TestCase):
+class FilterMethodTests(TestCase):
+
+    def setUp(self):
+        User.objects.create(username='alex')
+        User.objects.create(username='jacob')
+        User.objects.create(username='aaron')
 
     def test_filtering(self):
-        User.objects.create(username='alex')
-        User.objects.create(username='jacob')
-        User.objects.create(username='aaron')
-
         class F(FilterSet):
-            username = MethodFilter(action='filter_username')
+            username = CharFilter(method='filter_username')
 
             class Meta:
                 model = User
                 fields = ['username']
 
-            def filter_username(self, queryset, value):
-                return queryset.filter(
-                    username=value
-                )
+            def filter_username(self, queryset, name, value):
+                return queryset.filter(**{name: value})
 
         self.assertEqual(list(F().qs), list(User.objects.all()))
         self.assertEqual(list(F({'username': 'alex'}).qs),
@@ -918,18 +1165,12 @@ class MethodFilterTests(TestCase):
         self.assertEqual(list(F({'username': 'jose'}).qs),
                          list())
 
-    def test_filtering_external(self):
-        User.objects.create(username='alex')
-        User.objects.create(username='jacob')
-        User.objects.create(username='aaron')
-
-        def filter_username(queryset, value):
-            return queryset.filter(
-                username=value
-            )
+    def test_filtering_callable(self):
+        def filter_username(queryset, name, value):
+            return queryset.filter(**{name: value})
 
         class F(FilterSet):
-            username = MethodFilter(action=filter_username)
+            username = CharFilter(method=filter_username)
 
             class Meta:
                 model = User
@@ -940,57 +1181,6 @@ class MethodFilterTests(TestCase):
                          [User.objects.get(username='alex')])
         self.assertEqual(list(F({'username': 'jose'}).qs),
                          list())
-
-
-    def test_filtering_default_attribute_action(self):
-        User.objects.create(username='mike')
-        User.objects.create(username='jake')
-        User.objects.create(username='aaron')
-
-        class F(FilterSet):
-            username = MethodFilter()
-
-            class Meta:
-                model = User
-                fields = ['username']
-
-            def filter_username(self, queryset, value):
-                return queryset.filter(
-                    username__contains='ke'
-                )
-
-        self.assertEqual(list(F().qs), list(User.objects.all()))
-        self.assertEqual(list(F({'username': 'mike'}).qs),
-                         [User.objects.get(username='mike'),
-                          User.objects.get(username='jake')],)
-        self.assertEqual(list(F({'username': 'jake'}).qs),
-                         [User.objects.get(username='mike'),
-                          User.objects.get(username='jake')])
-        self.assertEqual(list(F({'username': 'aaron'}).qs),
-                         [User.objects.get(username='mike'),
-                          User.objects.get(username='jake')])
-
-
-    def test_filtering_default(self):
-        User.objects.create(username='mike')
-        User.objects.create(username='jake')
-        User.objects.create(username='aaron')
-
-        class F(FilterSet):
-            username = MethodFilter()
-            email = MethodFilter()
-
-            class Meta:
-                model = User
-                fields = ['username']
-
-        self.assertEqual(list(F().qs), list(User.objects.all()))
-        self.assertEqual(list(F({'username': 'mike'}).qs),
-                         list(User.objects.all()))
-        self.assertEqual(list(F({'username': 'jake'}).qs),
-                         list(User.objects.all()))
-        self.assertEqual(list(F({'username': 'aaron'}).qs),
-                         list(User.objects.all()))
 
 
 class O2ORelationshipTests(TestCase):
@@ -1253,8 +1443,8 @@ class M2MRelationshipTests(TestCase):
                                  average_rating=4.0)
         Book.objects.create(title="Stranger in a Strage Land", price='2.00',
                             average_rating=3.0)
-        alex.favorite_books = [b1, b2]
-        aaron.favorite_books = [b1, b3]
+        alex.favorite_books.add(b1, b2)
+        aaron.favorite_books.add(b1, b3)
 
     def test_m2m_relation(self):
         class F(FilterSet):
@@ -1646,6 +1836,46 @@ class CSVFilterTests(TestCase):
         self.assertEqual(f.qs.count(), 2)
 
 
+class OrderingFilterTests(TestCase):
+
+    def setUp(self):
+        User.objects.create(username='alex', status=1)
+        User.objects.create(username='jacob', status=2)
+        User.objects.create(username='aaron', status=2)
+        User.objects.create(username='carl', status=0)
+
+    def test_ordering(self):
+        class F(FilterSet):
+            o = OrderingFilter(
+                fields=('username', )
+            )
+
+            class Meta:
+                model = User
+                fields = ['username']
+
+        qs = User.objects.all()
+        f = F({'o': 'username'}, queryset=qs)
+        names = f.qs.values_list('username', flat=True)
+        self.assertEqual(list(names), ['aaron', 'alex', 'carl', 'jacob'])
+
+    def test_ordering_with_select_widget(self):
+        class F(FilterSet):
+            o = OrderingFilter(
+                widget=forms.Select,
+                fields=('username', )
+            )
+
+            class Meta:
+                model = User
+                fields = ['username']
+
+        qs = User.objects.all()
+        f = F({'o': 'username'}, queryset=qs)
+        names = f.qs.values_list('username', flat=True)
+        self.assertEqual(list(names), ['aaron', 'alex', 'carl', 'jacob'])
+
+
 class MiscFilterSetTests(TestCase):
 
     def setUp(self):
@@ -1662,7 +1892,7 @@ class MiscFilterSetTests(TestCase):
                 model = User
                 fields = ['account']
 
-        qs = mock.MagicMock()
+        qs = mock.NonCallableMagicMock()
         f = F({'account': 'jdoe'}, queryset=qs)
         result = f.qs
         self.assertNotEqual(qs, result)
@@ -1682,20 +1912,9 @@ class MiscFilterSetTests(TestCase):
         f = F({'username': 'alex', 'status': '2'}, queryset=qs)
         self.assertQuerysetEqual(f.qs, [], lambda o: o.pk)
 
-    def test_filter_with_action(self):
-        class F(FilterSet):
-            username = CharFilter(action=lambda qs, value: (
-                qs.filter(**{'username__startswith': value})))
-
-            class Meta:
-                model = User
-                fields = ['username']
-
-        f = F({'username': 'a'}, queryset=User.objects.all())
-        self.assertQuerysetEqual(
-            f.qs, ['alex', 'aaron'], lambda o: o.username, False)
-
     def test_filter_with_initial(self):
+        # Initial values are a form presentation option - the FilterSet should
+        # not use an initial value as a default value to filter by.
         class F(FilterSet):
             status = ChoiceFilter(choices=STATUS_CHOICES, initial=1)
 
@@ -1704,8 +1923,10 @@ class MiscFilterSetTests(TestCase):
                 fields = ['status']
 
         qs = User.objects.all()
+        users = ['alex', 'jacob', 'aaron', 'carl']
+
         f = F(queryset=qs)
-        self.assertQuerysetEqual(f.qs, ['alex'], lambda o: o.username)
+        self.assertQuerysetEqual(f.qs.order_by('pk'), users, lambda o: o.username)
 
         f = F({'status': 0}, queryset=qs)
         self.assertQuerysetEqual(f.qs, ['carl'], lambda o: o.username)

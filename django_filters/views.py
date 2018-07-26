@@ -1,9 +1,13 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
+
 from django.core.exceptions import ImproperlyConfigured
 from django.views.generic import View
-from django.views.generic.list import MultipleObjectMixin
-from django.views.generic.list import MultipleObjectTemplateResponseMixin
+from django.views.generic.list import (
+    MultipleObjectMixin,
+    MultipleObjectTemplateResponseMixin
+)
+
+from .constants import ALL_FIELDS
 from .filterset import filterset_factory
 
 
@@ -12,6 +16,7 @@ class FilterMixin(object):
     A mixin that provides a way to show and handle a FilterSet in a request.
     """
     filterset_class = None
+    filter_fields = ALL_FIELDS
 
     def get_filterset_class(self):
         """
@@ -20,7 +25,7 @@ class FilterMixin(object):
         if self.filterset_class:
             return self.filterset_class
         elif self.model:
-            return filterset_factory(self.model)
+            return filterset_factory(model=self.model, fields=self.filter_fields)
         else:
             msg = "'%s' must define 'filterset_class' or 'model'"
             raise ImproperlyConfigured(msg % self.__class__.__name__)
@@ -36,7 +41,10 @@ class FilterMixin(object):
         """
         Returns the keyword arguments for instanciating the filterset.
         """
-        kwargs = {'data': self.request.GET or None}
+        kwargs = {
+            'data': self.request.GET or None,
+            'request': self.request,
+        }
         try:
             kwargs.update({
                 'queryset': self.get_queryset(),

@@ -1,10 +1,9 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 from django import forms
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
-
+from django.utils.translation import ugettext_lazy as _
 
 REGULAR = 0
 MANAGER = 1
@@ -45,7 +44,7 @@ class SubnetMaskField(models.Field):
 
 @python_2_unicode_compatible
 class User(models.Model):
-    username = models.CharField(max_length=255)
+    username = models.CharField(_('username'), max_length=255)
     first_name = SubCharField(max_length=100)
     last_name = SubSubCharField(max_length=100)
 
@@ -95,6 +94,7 @@ class Comment(models.Model):
 
 
 class Article(models.Model):
+    name = models.CharField(verbose_name='title', max_length=200, blank=True)
     published = models.DateTimeField()
     author = models.ForeignKey(User, null=True, on_delete=models.CASCADE)
 
@@ -128,6 +128,8 @@ class Restaurant(Place):
 class NetworkSetting(models.Model):
     ip = models.GenericIPAddressField()
     mask = SubnetMaskField()
+
+    cidr = models.CharField(max_length=18, blank=True, verbose_name="CIDR")
 
 
 @python_2_unicode_compatible
