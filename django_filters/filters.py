@@ -706,11 +706,11 @@ class FilterMethod(object):
     def __init__(self, filter_instance):
         self.f = filter_instance
 
-    def __call__(self, qs, value):
+    def __call__(self, qs, value, exclude):
         if value in EMPTY_VALUES:
             return qs
 
-        return self.method(qs, self.f.field_name, value, self.exclude)
+        return self.method(qs, self.f.field_name, value, exclude)
 
     @property
     def method(self):
